@@ -31,15 +31,21 @@ function run(name, options = {}) {
   const logs = [];
   const reads = [];
   const writes = [];
+  const req = {
+    url: options.url || "https://one.google.com/ai?fixture=1",
+    headers: { Cookie: "cookie-secret", Authorization: "auth-secret" }
+  };
+  if (Object.prototype.hasOwnProperty.call(options, "requestBody")) {
+    req.body = options.requestBody;
+  }
   const context = {
-    $request: {
-      url: options.url || "https://one.google.com/ai?fixture=1",
-      headers: { Cookie: "cookie-secret", Authorization: "auth-secret" }
-    },
-    $response: { body: options.body, headers: { "x-private": "response-secret" } },
+    $request: req,
     $done: payload => calls.push(JSON.parse(JSON.stringify(payload))),
     console: { log: value => logs.push(String(value)) }
   };
+  if (!options.isRequest) {
+    context.$response = { body: options.body, headers: { "x-private": "response-secret" } };
+  }
   if (Object.prototype.hasOwnProperty.call(options, "argument")) {
     context.$argument = options.argument;
   }
@@ -81,7 +87,7 @@ test("combined module maps 2TB, 20TB and 30TB while preserving unrelated full to
   assert.equal(record.hitCount, 5);
   assert.equal(record.annualHitCount, 3);
   assert.equal(record.status, "rewritten");
-  assert.equal(record.version, "g1-acq-v8.0");
+  assert.equal(record.version, "g1-acq-v8.1");
   assert.deepEqual(record.matchedFrom, [
     { id: TWENTY, to: TWENTY_TARGET, count: 1, fallback: false },
     { id: OTHER_SOURCE, to: TARGET, count: 1, fallback: false },
@@ -130,7 +136,7 @@ test("fallback decisions are independent and the 2TB target stays fixed", () => 
 
 test("single module collects other Google pages without changing the last mapping record", () => {
   for (const url of [
-    "https://one.google.com/settings?token=private-token",
+    "https://one.google.com/support/help?token=private-token",
     "https://one.google.com/account/profile"
   ]) {
     const previous = JSON.stringify({ schemaVersion: 1, version: "previous-record", hitCount: 2 });
@@ -172,7 +178,7 @@ test("single module saves original candidates before rewriting without recording
   const result = run("g1-acq.js", { body });
   assert.deepEqual(JSON.parse(result.payload.body), [TARGET, TARGET, TWENTY_TARGET, THIRTY_TARGET, "com.google.one.fixture"]);
   const scan = get(result.storage, SCAN_KEY);
-  assert.equal(scan.version, "g1-acq-v8.0");
+  assert.equal(scan.version, "g1-acq-v8.1");
   assert.deepEqual(scan.skus.map(row => row.id), ["com.google.one.fixture", TWENTY, SOURCE, THIRTY]);
   assert.equal(scan.skus.find(row => row.id === SOURCE).count, 2);
   assert.deepEqual(result.writes, [SCAN_KEY, TEST_KEY]);
@@ -206,7 +212,7 @@ test("single-module collection decodes discovery copies and continues mapping wh
 
 test("activity distinguishes new IDs, repeated IDs, empty text and nontext responses", () => {
   const storage = new Map();
-  const url = "https://one.google.com/settings?token=private-token";
+  const url = "https://one.google.com/support/help?token=private-token";
   const body = [SOURCE, SOURCE, OTHER_SOURCE].join(" ");
   run("g1-acq.js", { url, body, storage });
   let scan = get(storage, SCAN_KEY);
@@ -238,7 +244,7 @@ test("activity distinguishes new IDs, repeated IDs, empty text and nontext respo
   assert.deepEqual(data.scan.recentResponses, scan.recentResponses);
   assert.equal(data.scan.nonTextResponses, 1);
   const html = run("g1-sku-report.js", { url: REPORT, storage }).payload.response.body;
-  assert(html.includes("实际采集脚本：<code>g1-acq-v8.0</code>"));
+  assert(html.includes("实际采集脚本：<code>g1-acq-v8.1</code>"));
   assert(html.includes("编号与已有记录重复"));
   assert(html.includes("正文不是可扫描文本"));
 });
@@ -287,7 +293,7 @@ test("old scan records remain old until an actual response creates a new diagnos
   assert(html.includes("旧采集记录；尚未保存本版采集响应记录"));
   run("g1-acq.js", { url: "https://one.google.com/plans", body: SOURCE, storage });
   data = JSON.parse(run("g1-sku-report.js", { url: REPORT + "?format=json", storage }).payload.response.body);
-  assert.equal(data.scan.version, "g1-acq-v8.0");
+  assert.equal(data.scan.version, "g1-acq-v8.1");
   assert.equal(data.scan.scannedResponses, 6);
   assert.equal(data.scan.matchedResponses, 2);
   assert.equal(data.scan.skus.length, 1);
@@ -303,7 +309,7 @@ test("activity export rejects malformed metadata and excludes untrusted extra fi
     candidateCount: 2, addedCount: 0, omittedCount: 0, body: "private-body", query: "private-token"
   };
   const storage = new Map([[SCAN_KEY, JSON.stringify({
-    schemaVersion: 1, version: "g1-acq-v8.0",
+    schemaVersion: 1, version: "g1-acq-v8.1",
     recentResponses: [event, { ...event, at: "<script>private</script>" }, { ...event, status: "constructor" }, { ...event, bodyType: "unknown" }]
   })]]);
   const result = run("g1-sku-report.js", { url: REPORT + "?format=json", storage });
@@ -397,7 +403,7 @@ test("report displays captured IDs and test sources without external assets", ()
   assert.match(payload.response.body, /Google One SKU 本地报告/);
   assert(payload.response.body.includes(SOURCE));
   assert(payload.response.body.includes(TARGET));
-  assert(payload.response.body.includes("本机脚本已接管 · v8.0.0"));
+  assert(payload.response.body.includes("本机脚本已接管 · v8.1.0"));
   assert.match(payload.response.body, /<button\b[^>]*name=format[^>]*value=json[^>]*>导出 JSON<\/button>/);
   assert(!/<(?:script|img|iframe)\b/i.test(payload.response.body));
   assert.equal(payload.response.headers["Cache-Control"], "no-store");
@@ -416,15 +422,15 @@ test("report export form resolves to a JSON attachment and supports a trailing s
     const result = run("g1-sku-report.js", { url: exportURL, storage });
     assert.equal(result.payload.response.status, 200);
     assert.equal(result.payload.response.headers["Content-Disposition"], 'attachment; filename="g1-sku-report.json"');
-    assert.equal(result.payload.response.headers["X-G1-Report-Version"], "v8.0.0");
+    assert.equal(result.payload.response.headers["X-G1-Report-Version"], "v8.1.0");
     const data = JSON.parse(result.payload.response.body);
-    assert.equal(data.reportVersion, "v8.0.0");
+    assert.equal(data.reportVersion, "v8.1.0");
     assert.equal(data.configuredTarget, TARGET);
     assert.equal(data.test.target, TARGET);
     assert.equal(data.test.targetOrigin, "user-specified");
     assert.equal(data.scan.skus[0].id, SOURCE);
     assert.equal(data.test.matchedFrom[0].to, TARGET);
-    assert(result.logs.some(line => line.includes("[g1-sku-report] v8.0.0 json")));
+    assert(result.logs.some(line => line.includes("[g1-sku-report] v8.1.0 json")));
   }
 });
 
@@ -435,7 +441,7 @@ test("report exports each actual target and separates annual hits from total hit
   });
   const result = run("g1-sku-report.js", { url: REPORT + "?format=json", storage });
   const data = JSON.parse(result.payload.response.body).test;
-  assert.equal(data.version, "g1-acq-v8.0");
+  assert.equal(data.version, "g1-acq-v8.1");
   assert.equal(data.hitCount, 3);
   assert.equal(data.annualHitCount, 1);
   assert.equal(data.matchedFrom.find(row => row.id === TWENTY).to, TWENTY_TARGET);
@@ -582,7 +588,7 @@ test("the new installer replaces the old entry and legacy modules share one fixe
   }
 });
 
-test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.0.0 scripts, and custom proxy routing", () => {
+test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.1.0 scripts, and custom proxy routing", () => {
   assert.equal(fs.existsSync(path.join(root, "g1-acq-v7.sgmodule")), false);
   const module = fs.readFileSync(path.join(root, "g1-acq-v8.sgmodule"), "utf8");
   assert.match(module, /^#!name=G1 ACQ$/m);
@@ -621,32 +627,53 @@ test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.0.0 scripts, and custo
   }
 
   const scripts = module.split("\n").filter(line => line.includes("script-path="));
-  assert.equal(scripts.length, 2);
-  const responseLine = expand(scripts.find(line => line.includes("type=http-response")));
-  const requestLine = expand(scripts.find(line => line.includes("type=http-request")));
-  assert.equal(
-    responseLine.match(/script-path=([^,\s]+)/)[1],
-    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.0.0/g1-acq.js"
+  assert.equal(scripts.length, 4);
+  const byName = Object.fromEntries(
+    scripts.map(line => [line.split("=")[0].trim(), expand(line)])
   );
   assert.equal(
-    requestLine.match(/script-path=([^,\s]+)/)[1],
-    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.0.0/g1-sku-report.js"
+    byName["g1-acq"].match(/script-path=([^,\s]+)/)[1],
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-acq.js"
+  );
+  assert.equal(
+    byName["g1-acq-req"].match(/script-path=([^,\s]+)/)[1],
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-acq.js"
+  );
+  assert.equal(
+    byName["g1-acq-checkout"].match(/script-path=([^,\s]+)/)[1],
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-acq.js"
+  );
+  assert.equal(
+    byName["g1-sku-report"].match(/script-path=([^,\s]+)/)[1],
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-sku-report.js"
   );
   assert(fs.existsSync(path.join(root, "g1-acq.js")));
   assert(fs.existsSync(path.join(root, "g1-sku-report.js")));
-  assert.match(responseLine, /argument="rewriteWeb=true"/);
+  assert.match(byName["g1-acq"], /argument="rewriteWeb=true"/);
+  assert.match(byName["g1-acq-req"], /type=http-request/);
+  assert.match(byName["g1-acq-req"], /requires-body=1/);
+  assert.match(byName["g1-acq-checkout"], /type=http-request/);
 
-  const responsePattern = new RegExp(responseLine.match(/pattern=([^,]+)/)[1]);
+  const responsePattern = new RegExp(byName["g1-acq"].match(/pattern=([^,]+)/)[1]);
   assert(responsePattern.test("https://one.google.com/"));
   assert(responsePattern.test("https://one.google.com/u/0/plans?hl=vi"));
   assert(responsePattern.test("https://one.google.com/_/GoogleOneWebUi/data/batchexecute"));
   assert(!responsePattern.test("https://one.google.com.evil/plans"));
 
-  const reportPattern = new RegExp(requestLine.match(/pattern=([^,]+)/)[1]);
+  const reqBatchPattern = new RegExp(byName["g1-acq-req"].match(/pattern=([^,]+)/)[1]);
+  assert(reqBatchPattern.test("https://one.google.com/_/GoogleOneWebUi/data/batchexecute?rpcids=Ngbm"));
+  assert(reqBatchPattern.test("https://one.google.com/u/1/_/GoogleOneWebUi/data/batchexecute"));
+  assert(!reqBatchPattern.test("https://one.google.com/plans"));
+
+  const checkoutPattern = new RegExp(byName["g1-acq-checkout"].match(/pattern=([^,]+)/)[1]);
+  assert(checkoutPattern.test("https://tokenized.play.google.com/eacquire/multiline?authuser=0&ear=%5B%5D"));
+  assert(!checkoutPattern.test("https://play.google.com/store"));
+
+  const reportPattern = new RegExp(byName["g1-sku-report"].match(/pattern=([^,]+)/)[1]);
   for (const url of [REPORT, REPORT + "?format=json", REPORT + "/", REPORT + "/?format=json"]) {
     assert(reportPattern.test(url));
   }
-  assert.match(module, /^hostname = %APPEND% one\.google\.com$/m);
+  assert.match(module, /^hostname = %APPEND% one\.google\.com, tokenized\.play\.google\.com$/m);
 });
 
 test("web routes and multi-account paths rewrite and redact path categories safely", () => {
@@ -654,9 +681,18 @@ test("web routes and multi-account paths rewrite and redact path categories safe
     ["https://one.google.com/", "/"],
     ["https://one.google.com/ai", "/ai"],
     ["https://one.google.com/ai/plans", "/ai"],
+    ["https://one.google.com/ai-plans", "/ai"],
     ["https://one.google.com/plans", "/plans"],
     ["https://one.google.com/u/0/plans?hl=vi", "/plans"],
     ["https://one.google.com/u/2/ai", "/ai"],
+    ["https://one.google.com/upgrade", "/upgrade"],
+    ["https://one.google.com/u/0/upgrade?hl=vi", "/upgrade"],
+    ["https://one.google.com/settings", "/settings"],
+    ["https://one.google.com/u/1/settings", "/settings"],
+    ["https://one.google.com/buy/pro", "/checkout"],
+    ["https://one.google.com/checkout/plan", "/checkout"],
+    ["https://one.google.com/subscribe/pro", "/checkout"],
+    ["https://one.google.com/acquire/offer", "/checkout"],
     ["https://one.google.com/about/google-ai-plans/", "/about"],
     ["https://one.google.com/explore-plan/pro", "/explore-plan"],
     ["https://one.google.com/offer/abc", "/offer"],
@@ -726,4 +762,161 @@ test("web SKUs map with fallback, escaped JSON, Play prefix, and unexpanded argu
   const fbRows = get(fallbackRes.storage, TEST_KEY).matchedFrom;
   assert.equal(fbRows.find(row => row.id === "g1.30tb").fallback, true);
   assert.equal(fbRows.find(row => row.id === "g1.play.20tb").fallback, false);
+});
+
+test("batchexecute response recalculates chunk length prefixes without corrupting JSON or Unicode", () => {
+  const chunk1 = JSON.stringify([["wrb.fr", "abc", JSON.stringify(["₫489,000", "g1.2tb.ai", "g1.20tb"]), null, null, null, "1"]]);
+  const chunk2 = JSON.stringify([["wrb.fr", "def", JSON.stringify(["g1.ai.pro"]), null, null, null, "2"]]);
+  const chunk3 = JSON.stringify([["di", 42]]);
+  const framed = [
+    ")]}'",
+    "",
+    String(Buffer.byteLength(chunk1, "utf8")),
+    chunk1,
+    String(chunk2.length),
+    chunk2,
+    String(chunk3.length),
+    chunk3,
+    ""
+  ].join("\n");
+
+  const storage = new Map();
+  const res = run("g1-acq.js", {
+    url: "https://one.google.com/u/0/_/GoogleOneWebUi/data/batchexecute?rt=c",
+    body: framed,
+    storage
+  });
+  const lines = res.payload.body.split("\n");
+  assert.equal(lines[0], ")]}'");
+  assert.equal(lines[1], "");
+  assert.equal(Number(lines[2]), Buffer.byteLength(lines[3], "utf8"));
+  assert.equal(Number(lines[4]), lines[5].length);
+  assert.equal(Number(lines[6]), lines[7].length);
+  assert.equal(lines[7], chunk3);
+  assert(lines[3].includes(TARGET));
+  assert(lines[3].includes(TWENTY_TARGET));
+  assert(lines[3].includes("₫489,000"));
+  assert(lines[5].includes(THIRTY_TARGET));
+  assert.doesNotThrow(() => JSON.parse(lines[3]));
+  assert.doesNotThrow(() => JSON.parse(lines[5]));
+  assert.doesNotThrow(() => JSON.parse(lines[7]));
+  assert.equal(get(storage, TEST_KEY).hitCount, 3);
+  assert.equal(get(storage, TEST_KEY).annualHitCount, 1);
+
+  const unframed = ")]}'\n\n" + JSON.stringify([["wrb.fr", "ghi", JSON.stringify(["g1.2tb.ai"]), null, null, null, "1"]]);
+  const unframedRes = run("g1-acq.js", {
+    url: "https://one.google.com/_/GoogleOneWebUi/data/batchexecute",
+    body: unframed
+  });
+  const parsedUnframed = JSON.parse(unframedRes.payload.body.slice(6));
+  assert.deepEqual(JSON.parse(parsedUnframed[0][2]), [TARGET]);
+});
+
+test("http-request Ngbm batchexecute patches upgrade items, offer tokens, and mode=5", () => {
+  const PRO_TOK = "AYrTWi7W8ZhHHzTZCLOtTLeN/Th2bL1VXWC0iWtQT8+2r4czXLlSZlHvbr8wJVXd7Z0IE//tsVOhqXZPDVTZyer/axAhjZ/A";
+  const ULTRA_TOK = "AYrTWi6m390S5L8/v/68ytX7FGefqs730Fb8RMphQ9nHXjRga2FTIto3+rL6WvPp4kNgYB2aQTdKr8S4mI6ehGhrLWAW4tti";
+  const prefix = "subs:com.google.android.apps.subscriptions.red:";
+  const makeNode = (sku, oldTok, withSub) => {
+    const node = new Array(13).fill(null);
+    node[2] = [null, null, new Array(9).fill(null)];
+    node[2][2][8] = [[[
+      [prefix + sku, 21], null, null, null, 1, [oldTok]
+    ]]];
+    node[7] = withSub ? [null, 2, null, null, null, ["sub_active_123"]] : null;
+    node[10] = [[[
+      [prefix + sku, 21], null, null, null, 1, [oldTok]
+    ]]];
+    node[12] = [
+      [[prefix + sku, 21], null, null, null, 1, [oldTok]],
+      [[prefix + "g1.youtube_premium_individual_add_on", 21], null, null, null, 1, ["YT_TOK"]]
+    ];
+    return node;
+  };
+
+  const payload = [makeNode("g1.2tb.ai", "WRONG_TOK", true), makeNode("g1.20tb.3months_ip_75p.acq", "OLD_20", false)];
+  const freq = [[[ "Ngbm", JSON.stringify(payload), null, "generic" ]]];
+  const reqBody = "f.req=" + encodeURIComponent(JSON.stringify(freq)) + "&at=secret_xsrf";
+
+  const res = run("g1-acq.js", {
+    isRequest: true,
+    url: "https://one.google.com/u/0/_/GoogleOneWebUi/data/batchexecute?rpcids=Ngbm",
+    requestBody: reqBody
+  });
+  const outParams = new URLSearchParams(res.payload.body);
+  assert.equal(outParams.get("at"), "secret_xsrf");
+  const outOuter = JSON.parse(outParams.get("f.req"));
+  const outPayload = JSON.parse(outOuter[0][0][1]);
+  assert.equal(outPayload[0][12][0][0][0], prefix + TARGET);
+  assert.deepEqual(outPayload[0][12][0][5], [PRO_TOK]);
+  assert.equal(outPayload[0][12][1][0][0], prefix + "g1.youtube_premium_individual_add_on");
+  assert.deepEqual(outPayload[0][12][1][5], ["YT_TOK"]);
+  assert.equal(outPayload[0][7][1], 5);
+  assert.equal(outPayload[0][10][0][0][0][0], prefix + TARGET);
+  assert.deepEqual(outPayload[0][10][0][0][5], [PRO_TOK]);
+  assert.equal(outPayload[0][2][2][8][0][0][0][0], prefix + TARGET);
+  assert.deepEqual(outPayload[0][2][2][8][0][0][5], [PRO_TOK]);
+  assert.equal(outPayload[1][12][0][0][0], prefix + TWENTY_FALLBACK);
+  assert.deepEqual(outPayload[1][12][0][5], [ULTRA_TOK]);
+
+  const untouchedFreq = [[[ "Ngbm", JSON.stringify([makeNode("g1.100gb", "KEEP_100", true)]), null, "generic" ]]];
+  const untouchedRes = run("g1-acq.js", {
+    isRequest: true,
+    url: "https://one.google.com/_/GoogleOneWebUi/data/batchexecute",
+    requestBody: "f.req=" + encodeURIComponent(JSON.stringify(untouchedFreq))
+  });
+  assert.deepEqual(untouchedRes.payload, {});
+
+  const disabledRes = run("g1-acq.js", {
+    isRequest: true,
+    url: "https://one.google.com/_/GoogleOneWebUi/data/batchexecute",
+    requestBody: reqBody,
+    argument: "rewriteWeb=false"
+  });
+  assert.deepEqual(disabledRes.payload, {});
+});
+
+test("http-request tokenized.play.google.com/eacquire/multiline patches ear and base64 inner4 without Web globals", () => {
+  const PRO_TOK = "AYrTWi7W8ZhHHzTZCLOtTLeN/Th2bL1VXWC0iWtQT8+2r4czXLlSZlHvbr8wJVXd7Z0IE//tsVOhqXZPDVTZyer/axAhjZ/A";
+  const prefix = "subs:com.google.android.apps.subscriptions.red:";
+  const inner4 = new Array(9).fill(null);
+  inner4[8] = [[[[prefix + TARGET, 21], null, null, null, 1, ["STALE_TOK"]]]];
+
+  const ear = new Array(25).fill(null);
+  ear[4] = [Buffer.from(JSON.stringify(inner4), "utf8").toString("base64")];
+  ear[8] = [null, 2, null, null, null, ["sub_old_999"]];
+  ear[13] = [[[[prefix + "g1.2tb.ai", 21], null, null, null, 1, ["BAD_TOK"]]]];
+  ear[24] = ["stale-proration"];
+
+  const checkoutUrl = "https://tokenized.play.google.com/eacquire/multiline?authuser=0&ear=" +
+    encodeURIComponent(JSON.stringify(ear)) + "&parent=https%3A%2F%2Fone.google.com";
+  const res = run("g1-acq.js", {
+    isRequest: true,
+    url: checkoutUrl
+  });
+  const parsedUrl = new URL(res.payload.url);
+  assert.equal(parsedUrl.searchParams.get("authuser"), "0");
+  assert.equal(parsedUrl.searchParams.get("parent"), "https://one.google.com");
+  const outEar = JSON.parse(parsedUrl.searchParams.get("ear"));
+  assert.equal(outEar[13][0][0][0][0], prefix + TARGET);
+  assert.deepEqual(outEar[13][0][0][5], [PRO_TOK]);
+  assert.equal(outEar[8][1], 5);
+  assert.equal(outEar[24], null);
+  const outInner4 = JSON.parse(Buffer.from(outEar[4][0], "base64").toString("utf8"));
+  assert.equal(outInner4[8][0][0][0][0], prefix + TARGET);
+  assert.deepEqual(outInner4[8][0][0][5], [PRO_TOK]);
+
+  const nonTargetEar = new Array(14).fill(null);
+  nonTargetEar[13] = [[[[prefix + "g1.100gb", 21], null, null, null, 1, ["KEEP"]]]];
+  const untouched = run("g1-acq.js", {
+    isRequest: true,
+    url: "https://tokenized.play.google.com/eacquire/multiline?ear=" + encodeURIComponent(JSON.stringify(nonTargetEar))
+  });
+  assert.deepEqual(untouched.payload, {});
+
+  const disabled = run("g1-acq.js", {
+    isRequest: true,
+    url: checkoutUrl,
+    argument: "rewriteWeb=false"
+  });
+  assert.deepEqual(disabled.payload, {});
 });

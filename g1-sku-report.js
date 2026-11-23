@@ -3,8 +3,8 @@
 
 (function () {
   var ROOT = "https://one.google.com/g1-sku-report";
-  var VERSION = "v8.0.0";
-  var COLLECTOR_VERSION = "g1-acq-v8.0";
+  var VERSION = "v8.1.0";
+  var COLLECTOR_VERSION = "g1-acq-v8.1";
   var CONFIGURED_TARGET = "g1.2tb.ai.12months_ip_90p";
   var LEGACY_TARGET = "g1.2tb.ai.annual";
   var SCAN_KEY = "g1.sku.scan.v1";
@@ -72,8 +72,8 @@
     "non-text": "收到响应，正文不是可扫描文本"
   };
   var scanPaths = [
-    "/", "/ai", "/plans", "/about", "/explore-plan", "/offer", "/storage",
-    "/_/…/data/batchexecute", "[其他 one.google.com 路径]"
+    "/", "/ai", "/plans", "/upgrade", "/settings", "/about", "/explore-plan",
+    "/offer", "/storage", "/checkout", "/_/…/data/batchexecute", "[其他 one.google.com 路径]"
   ];
   function recent(value) {
     if (!Array.isArray(value)) return [];
