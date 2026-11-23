@@ -44,7 +44,12 @@ function run(name, options = {}) {
     console: { log: value => logs.push(String(value)) }
   };
   if (!options.isRequest) {
-    context.$response = { body: options.body, headers: { "x-private": "response-secret" } };
+    const resp = {
+      body: options.body,
+      headers: options.responseHeaders || { "x-private": "response-secret" }
+    };
+    if (typeof options.status === "number") resp.status = options.status;
+    context.$response = resp;
   }
   if (Object.prototype.hasOwnProperty.call(options, "argument")) {
     context.$argument = options.argument;
@@ -87,7 +92,7 @@ test("combined module maps 2TB, 20TB and 30TB while preserving unrelated full to
   assert.equal(record.hitCount, 5);
   assert.equal(record.annualHitCount, 3);
   assert.equal(record.status, "rewritten");
-  assert.equal(record.version, "g1-acq-v8.1");
+  assert.equal(record.version, "g1-acq-v8.2");
   assert.deepEqual(record.matchedFrom, [
     { id: TWENTY, to: TWENTY_TARGET, count: 1, fallback: false },
     { id: OTHER_SOURCE, to: TARGET, count: 1, fallback: false },
@@ -178,7 +183,7 @@ test("single module saves original candidates before rewriting without recording
   const result = run("g1-acq.js", { body });
   assert.deepEqual(JSON.parse(result.payload.body), [TARGET, TARGET, TWENTY_TARGET, THIRTY_TARGET, "com.google.one.fixture"]);
   const scan = get(result.storage, SCAN_KEY);
-  assert.equal(scan.version, "g1-acq-v8.1");
+  assert.equal(scan.version, "g1-acq-v8.2");
   assert.deepEqual(scan.skus.map(row => row.id), ["com.google.one.fixture", TWENTY, SOURCE, THIRTY]);
   assert.equal(scan.skus.find(row => row.id === SOURCE).count, 2);
   assert.deepEqual(result.writes, [SCAN_KEY, TEST_KEY]);
@@ -244,7 +249,7 @@ test("activity distinguishes new IDs, repeated IDs, empty text and nontext respo
   assert.deepEqual(data.scan.recentResponses, scan.recentResponses);
   assert.equal(data.scan.nonTextResponses, 1);
   const html = run("g1-sku-report.js", { url: REPORT, storage }).payload.response.body;
-  assert(html.includes("实际采集脚本：<code>g1-acq-v8.1</code>"));
+  assert(html.includes("实际采集脚本：<code>g1-acq-v8.2</code>"));
   assert(html.includes("编号与已有记录重复"));
   assert(html.includes("正文不是可扫描文本"));
 });
@@ -293,7 +298,7 @@ test("old scan records remain old until an actual response creates a new diagnos
   assert(html.includes("旧采集记录；尚未保存本版采集响应记录"));
   run("g1-acq.js", { url: "https://one.google.com/plans", body: SOURCE, storage });
   data = JSON.parse(run("g1-sku-report.js", { url: REPORT + "?format=json", storage }).payload.response.body);
-  assert.equal(data.scan.version, "g1-acq-v8.1");
+  assert.equal(data.scan.version, "g1-acq-v8.2");
   assert.equal(data.scan.scannedResponses, 6);
   assert.equal(data.scan.matchedResponses, 2);
   assert.equal(data.scan.skus.length, 1);
@@ -309,7 +314,7 @@ test("activity export rejects malformed metadata and excludes untrusted extra fi
     candidateCount: 2, addedCount: 0, omittedCount: 0, body: "private-body", query: "private-token"
   };
   const storage = new Map([[SCAN_KEY, JSON.stringify({
-    schemaVersion: 1, version: "g1-acq-v8.1",
+    schemaVersion: 1, version: "g1-acq-v8.2",
     recentResponses: [event, { ...event, at: "<script>private</script>" }, { ...event, status: "constructor" }, { ...event, bodyType: "unknown" }]
   })]]);
   const result = run("g1-sku-report.js", { url: REPORT + "?format=json", storage });
@@ -403,7 +408,7 @@ test("report displays captured IDs and test sources without external assets", ()
   assert.match(payload.response.body, /Google One SKU 本地报告/);
   assert(payload.response.body.includes(SOURCE));
   assert(payload.response.body.includes(TARGET));
-  assert(payload.response.body.includes("本机脚本已接管 · v8.1.0"));
+  assert(payload.response.body.includes("本机脚本已接管 · v8.2.0"));
   assert.match(payload.response.body, /<button\b[^>]*name=format[^>]*value=json[^>]*>导出 JSON<\/button>/);
   assert(!/<(?:script|img|iframe)\b/i.test(payload.response.body));
   assert.equal(payload.response.headers["Cache-Control"], "no-store");
@@ -422,15 +427,15 @@ test("report export form resolves to a JSON attachment and supports a trailing s
     const result = run("g1-sku-report.js", { url: exportURL, storage });
     assert.equal(result.payload.response.status, 200);
     assert.equal(result.payload.response.headers["Content-Disposition"], 'attachment; filename="g1-sku-report.json"');
-    assert.equal(result.payload.response.headers["X-G1-Report-Version"], "v8.1.0");
+    assert.equal(result.payload.response.headers["X-G1-Report-Version"], "v8.2.0");
     const data = JSON.parse(result.payload.response.body);
-    assert.equal(data.reportVersion, "v8.1.0");
+    assert.equal(data.reportVersion, "v8.2.0");
     assert.equal(data.configuredTarget, TARGET);
     assert.equal(data.test.target, TARGET);
     assert.equal(data.test.targetOrigin, "user-specified");
     assert.equal(data.scan.skus[0].id, SOURCE);
     assert.equal(data.test.matchedFrom[0].to, TARGET);
-    assert(result.logs.some(line => line.includes("[g1-sku-report] v8.1.0 json")));
+    assert(result.logs.some(line => line.includes("[g1-sku-report] v8.2.0 json")));
   }
 });
 
@@ -441,7 +446,7 @@ test("report exports each actual target and separates annual hits from total hit
   });
   const result = run("g1-sku-report.js", { url: REPORT + "?format=json", storage });
   const data = JSON.parse(result.payload.response.body).test;
-  assert.equal(data.version, "g1-acq-v8.1");
+  assert.equal(data.version, "g1-acq-v8.2");
   assert.equal(data.hitCount, 3);
   assert.equal(data.annualHitCount, 1);
   assert.equal(data.matchedFrom.find(row => row.id === TWENTY).to, TWENTY_TARGET);
@@ -588,7 +593,7 @@ test("the new installer replaces the old entry and legacy modules share one fixe
   }
 });
 
-test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.1.0 scripts, and custom proxy routing", () => {
+test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.2.0 scripts, and custom proxy routing", () => {
   assert.equal(fs.existsSync(path.join(root, "g1-acq-v7.sgmodule")), false);
   const module = fs.readFileSync(path.join(root, "g1-acq-v8.sgmodule"), "utf8");
   assert.match(module, /^#!name=G1 ACQ$/m);
@@ -604,7 +609,8 @@ test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.1.0 scripts, and custo
   );
   assert.deepEqual(defaults, {
     PROXY_POLICY: "PROXY",
-    REWRITE_WEB: "true"
+    REWRITE_WEB: "true",
+    KEEP_IN_ONE: "true"
   });
   assert.match(module, /^#!arguments-desc=.*PROXY_POLICY:/m);
 
@@ -633,23 +639,23 @@ test("g1-acq-v8.sgmodule enables Web routes, jsDelivr @v8.1.0 scripts, and custo
   );
   assert.equal(
     byName["g1-acq"].match(/script-path=([^,\s]+)/)[1],
-    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-acq.js"
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.2.0/g1-acq.js"
   );
   assert.equal(
     byName["g1-acq-req"].match(/script-path=([^,\s]+)/)[1],
-    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-acq.js"
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.2.0/g1-acq.js"
   );
   assert.equal(
     byName["g1-acq-checkout"].match(/script-path=([^,\s]+)/)[1],
-    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-acq.js"
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.2.0/g1-acq.js"
   );
   assert.equal(
     byName["g1-sku-report"].match(/script-path=([^,\s]+)/)[1],
-    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.1.0/g1-sku-report.js"
+    "https://cdn.jsdelivr.net/gh/nguyentruong190/g1-acq@v8.2.0/g1-sku-report.js"
   );
   assert(fs.existsSync(path.join(root, "g1-acq.js")));
   assert(fs.existsSync(path.join(root, "g1-sku-report.js")));
-  assert.match(byName["g1-acq"], /argument="rewriteWeb=true"/);
+  assert.match(byName["g1-acq"], /argument="rewriteWeb=true&keepInOne=true"/);
   assert.match(byName["g1-acq-req"], /type=http-request/);
   assert.match(byName["g1-acq-req"], /requires-body=1/);
   assert.match(byName["g1-acq-checkout"], /type=http-request/);
@@ -919,4 +925,98 @@ test("http-request tokenized.play.google.com/eacquire/multiline patches ear and 
     argument: "rewriteWeb=false"
   });
   assert.deepEqual(disabled.payload, {});
+});
+
+test("keepInOne rewrites external subscription 3xx redirects back to one.google.com without looping", () => {
+  for (const loc of [
+    "https://play.google.com/store/account/subscriptions?sku=g1.2tb&package=com.google.android.apps.subscriptions.red",
+    "https://apps.apple.com/us/account/subscriptions",
+    "https://payments.google.com/gp/w/u/1/home/subscriptions"
+  ]) {
+    const res = run("g1-acq.js", {
+      url: "https://one.google.com/u/1/upgrade",
+      status: 302,
+      responseHeaders: { Location: loc, "Cache-Control": "no-store" },
+      body: ""
+    });
+    assert.equal(res.payload.headers.Location, "https://one.google.com/u/1/plans?g1_keep=1");
+    assert.equal(res.payload.headers["Cache-Control"], "no-store");
+  }
+
+  const fromPlans = run("g1-acq.js", {
+    url: "https://one.google.com/plans?hl=vi",
+    status: 302,
+    responseHeaders: { location: "https://play.google.com/store/account/subscriptions" },
+    body: ""
+  });
+  assert.equal(fromPlans.payload.headers.location, "https://one.google.com/ai?g1_keep=1");
+
+  const loopGuarded = run("g1-acq.js", {
+    url: "https://one.google.com/u/1/plans?g1_keep=1",
+    status: 302,
+    responseHeaders: { Location: "https://play.google.com/store/account/subscriptions" },
+    body: ""
+  });
+  assert.deepEqual(loopGuarded.payload, {});
+
+  const loginRedirect = run("g1-acq.js", {
+    url: "https://one.google.com/upgrade",
+    status: 302,
+    responseHeaders: { Location: "https://accounts.google.com/v3/signin/identifier" },
+    body: ""
+  });
+  assert.deepEqual(loginRedirect.payload, {});
+
+  const disabled = run("g1-acq.js", {
+    url: "https://one.google.com/u/1/upgrade",
+    status: 302,
+    responseHeaders: { Location: "https://play.google.com/store/account/subscriptions" },
+    body: "",
+    argument: "rewriteWeb=true&keepInOne=false"
+  });
+  assert.deepEqual(disabled.payload, {});
+});
+
+test("keepInOne rewrites one.google.com target=_blank links and injects nonce-matched guard on HTML only", () => {
+  const html = [
+    "<!doctype html><html><head><script nonce=\"abc123XYZ\">console.log(1);</script></head><body>",
+    '<a href="https://one.google.com/upgrade" target="_blank">Upgrade</a>',
+    '<a href="https://play.google.com/store/account/subscriptions" target="_blank">Manage</a>',
+    '<a href="https://support.google.com/googleone" target="_blank">Help</a>',
+    "</body></html>"
+  ].join("");
+  const storage = new Map();
+  const res = run("g1-acq.js", {
+    url: "https://one.google.com/plans",
+    body: html,
+    storage
+  });
+  assert(res.payload.body.includes('<a href="https://one.google.com/upgrade" target="_self">Upgrade</a>'));
+  assert(res.payload.body.includes('<a href="/plans?g1_keep=1" target="_self">Manage</a>'));
+  assert(res.payload.body.includes('<a href="https://support.google.com/googleone" target="_blank">Help</a>'));
+  assert(res.payload.body.includes('<script nonce="abc123XYZ">'));
+  assert(res.payload.body.includes("window.__g1KeepInOne"));
+  assert.equal(get(storage, TEST_KEY).hitCount, 0);
+
+  const cspHeaderOnlyHtml = "<html><head></head><body><a href=\"/upgrade\" target=\"_blank\">Up</a></body></html>";
+  const cspRes = run("g1-acq.js", {
+    url: "https://one.google.com/subscriptions",
+    responseHeaders: { "content-security-policy": "script-src 'nonce-hdrNonce99' 'unsafe-inline'" },
+    body: cspHeaderOnlyHtml
+  });
+  assert(cspRes.payload.body.includes('<a href="/upgrade" target="_self">Up</a>'));
+  assert(cspRes.payload.body.includes('<script nonce="hdrNonce99">'));
+
+  const disabled = run("g1-acq.js", {
+    url: "https://one.google.com/plans",
+    body: html,
+    argument: "rewriteWeb=true&keepInOne=false"
+  });
+  assert.deepEqual(disabled.payload, {});
+
+  const jsonRes = run("g1-acq.js", {
+    url: "https://one.google.com/plans",
+    body: JSON.stringify(["plain-text-no-html"])
+  });
+  assert.deepEqual(jsonRes.payload, {});
 });

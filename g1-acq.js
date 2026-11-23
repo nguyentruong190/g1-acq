@@ -2,7 +2,7 @@
 "use strict";
 
 (function () {
-  var VERSION = "g1-acq-v8.1";
+  var VERSION = "g1-acq-v8.2";
   var SOURCE_PREFIX = "g1.ios.2tb.";
   var SUB_PREFIX = "subs:com.google.android.apps.subscriptions.red:";
   // User-selected 12-month offer ID from the screenshot; store metadata is still unverified.
@@ -39,6 +39,8 @@
     "/", "/ai", "/plans", "/upgrade", "/settings", "/about", "/explore-plan",
     "/offer", "/storage", "/checkout", "/_/…/data/batchexecute", "[其他 one.google.com 路径]"
   ];
+  var EXTERNAL_MANAGE_RE = /^https?:\/\/(?:play\.google\.com\/store\/account\/subscriptions|apps\.apple\.com\/(?:[a-z]{2}\/)?account\/subscriptions|payments\.google\.com\/(?:gp\/w\/(?:u\/\d+\/)?home\/(?:subscriptions|settings)|payments\/u\/\d+\/home))/i;
+  var KEEP_TARGET_HREF_RE = /^(?:https?:)?\/\/one\.google\.com(?:\/|$)|^\/(?:u\/\d+\/)?(?:ai|ai-plans|plans|upgrade|settings|about|explore-plan|offer|storage|buy|checkout|subscribe|acquire|home)(?:[\/?#]|$)/i;
   var B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var TEST_KEY = "g1.pro.annual.test.v1";
   var SCAN_KEY = "g1.sku.scan.v1";
@@ -46,7 +48,8 @@
   var RECENT_LIMIT = 10;
   var MAX_EVENT_COUNT = 9007199254740991;
   var url = typeof $request === "object" && $request ? $request.url : "";
-  var rewriteWeb = parseRewriteWeb();
+  var rewriteWeb = parseBoolArg("rewriteWeb", true);
+  var keepInOne = parseBoolArg("keepInOne", true);
 
   if (typeof $response !== "object" || $response === null) {
     handleHttpRequest();
@@ -59,6 +62,13 @@
     return;
   }
 
+  var redirectHeaders = rewriteExternalRedirect(url, $response);
+  if (redirectHeaders) {
+    console.log("[g1-acq] " + VERSION + " kept external redirect inside one.google.com");
+    $done({ headers: redirectHeaders });
+    return;
+  }
+
   var body = $response.body;
   try {
     collectOriginalSkus(body);
@@ -67,7 +77,8 @@
   }
 
   if (!isRewriteUrl(url, rewriteWeb)) {
-    $done({});
+    var passiveKeep = applyKeepInOneHtml(body, $response.headers);
+    $done(passiveKeep.changed ? { body: passiveKeep.html } : {});
     return;
   }
 
@@ -114,6 +125,15 @@
     out = rewriteBatchExecute(body, replaceTokens);
   }
 
+  var stayModified = false;
+  if (typeof out === "string") {
+    var htmlKeep = applyKeepInOneHtml(out, $response.headers);
+    if (htmlKeep.changed) {
+      out = htmlKeep.html;
+      stayModified = true;
+    }
+  }
+
   var sources = Object.keys(mappings).sort().map(function (id) {
     return mappings[id];
   });
@@ -147,7 +167,7 @@
     console.log("[g1-acq] " + source.id + " -> " + source.to + " x" + source.count +
       (source.fallback ? " fallback=75p" : ""));
   });
-  $done(hits ? { body: out } : {});
+  $done(hits || stayModified ? { body: out } : {});
 
   function collectOriginalSkus(originalBody) {
     var now = new Date().toISOString();
@@ -521,20 +541,116 @@
     return framed > 0 ? result.join("") : replaceFn(text);
   }
 
-  function parseRewriteWeb() {
-    if (typeof $argument === "boolean") return $argument;
-    if (typeof $argument === "object" && $argument !== null &&
-        Object.prototype.hasOwnProperty.call($argument, "rewriteWeb")) {
-      return !/^(?:false|0|off|no)$/i.test(String($argument.rewriteWeb).trim());
+  function rewriteExternalRedirect(requestUrl, response) {
+    if (!keepInOne || typeof response !== "object" || response === null) return null;
+    if (typeof response.status !== "number" || response.status < 300 || response.status >= 400) return null;
+    if (/(?:\?|&)g1_keep=1(?:&|$)/.test(requestUrl)) return null;
+    var headers = response.headers;
+    if (!headers || typeof headers !== "object") return null;
+    var locKey = "";
+    var keys = Object.keys(headers);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].toLowerCase() === "location") {
+        locKey = keys[i];
+        break;
+      }
     }
-    if (typeof $argument !== "string") return true;
+    if (!locKey || typeof headers[locKey] !== "string" || !EXTERNAL_MANAGE_RE.test(headers[locKey])) return null;
+    var accMatch = requestUrl.match(/^https:\/\/one\.google\.com(\/u\/\d+)(?=\/|$)/);
+    var accPrefix = accMatch ? accMatch[1] : "";
+    var curPath = normalizePath(requestUrl);
+    var nextUrl = curPath === "/plans" ?
+      ("https://one.google.com" + accPrefix + "/ai?g1_keep=1") :
+      ("https://one.google.com" + accPrefix + "/plans?g1_keep=1");
+    var nextHeaders = {};
+    for (var j = 0; j < keys.length; j++) {
+      nextHeaders[keys[j]] = headers[keys[j]];
+    }
+    nextHeaders[locKey] = nextUrl;
+    return nextHeaders;
+  }
+
+  function extractCspNonce(html, responseHeaders) {
+    var tagMatch = html.match(/<script\b[^>]*\bnonce\s*=\s*(?:"([A-Za-z0-9+/=_-]+)"|'([A-Za-z0-9+/=_-]+)')/i);
+    if (tagMatch) return tagMatch[1] || tagMatch[2] || "";
+    if (responseHeaders && typeof responseHeaders === "object") {
+      var keys = Object.keys(responseHeaders);
+      for (var i = 0; i < keys.length; i++) {
+        if (/^content-security-policy$/i.test(keys[i])) {
+          var cspMatch = String(responseHeaders[keys[i]]).match(/'nonce-([A-Za-z0-9+/=_-]+)'/i);
+          if (cspMatch) return cspMatch[1];
+        }
+      }
+    }
+    return "";
+  }
+
+  function applyKeepInOneHtml(html, responseHeaders) {
+    if (!keepInOne || typeof html !== "string") return { html: html, changed: false };
+    if (!/(?:<!doctype\s+html|<html\b|<\/head>|<\/body>)/i.test(html)) return { html: html, changed: false };
+    var changed = false;
+    var outHtml = html.replace(/<a\b[^>]*>/gi, function (tag) {
+      var hrefMatch = tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+      if (!hrefMatch) return tag;
+      var href = (hrefMatch[1] || hrefMatch[2] || hrefMatch[3] || "").replace(/&amp;/gi, "&");
+      if (!KEEP_TARGET_HREF_RE.test(href) && !EXTERNAL_MANAGE_RE.test(href)) return tag;
+      var updated = tag.replace(/\btarget\s*=\s*(?:"_blank"|'_blank'|_blank(?=\s|>|$))/gi, 'target="_self"');
+      if (EXTERNAL_MANAGE_RE.test(href)) {
+        updated = updated.replace(/\bhref\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i, 'href="/plans?g1_keep=1"');
+      }
+      if (updated !== tag) changed = true;
+      return updated;
+    });
+
+    if (outHtml.indexOf("window.__g1KeepInOne") === -1) {
+      var guardBody =
+        "(function(){if(window.__g1KeepInOne)return;window.__g1KeepInOne=1;" +
+        "var EXT=/^https?:\\/\\/(?:play\\.google\\.com\\/store\\/account\\/subscriptions|apps\\.apple\\.com\\/(?:[a-z]{2}\\/)?account\\/subscriptions|payments\\.google\\.com\\/(?:gp\\/w\\/(?:u\\/\\d+\\/)?home\\/(?:subscriptions|settings)|payments\\/u\\/\\d+\\/home))/i;" +
+        "function acc(){var m=location.pathname.match(/^(\\/u\\/\\d+)(?=\\/|$)/);return m?m[1]:\"\";}" +
+        "function abs(u){try{return new URL(String(u),location.href).href;}catch(e){return \"\";}}" +
+        "var origOpen=window.open;" +
+        "window.open=function(u,t,f){var h=abs(u);" +
+        "if(EXT.test(h)){location.assign(acc()+\"/plans?g1_keep=1\");return window;}" +
+        "if(/^https:\\/\\/one\\.google\\.com(?:\\/|$)/i.test(h)){location.assign(h);return window;}" +
+        "return typeof origOpen===\"function\"?origOpen.call(window,u,t,f):null;};" +
+        "document.addEventListener(\"click\",function(ev){var el=ev.target&&ev.target.closest?ev.target.closest(\"a[href]\"):null;if(!el)return;" +
+        "var h=abs(el.getAttribute(\"href\"));" +
+        "if(EXT.test(h)){ev.preventDefault();location.assign(acc()+\"/plans?g1_keep=1\");return;}" +
+        "if(/^https:\\/\\/one\\.google\\.com(?:\\/|$)/i.test(h)){if(el.target===\"_blank\")el.target=\"_self\";}},true);" +
+        "})();";
+      var nonce = extractCspNonce(outHtml, responseHeaders);
+      var scriptTag = "<script" + (nonce ? ' nonce="' + nonce + '"' : "") + ">" + guardBody + "</script>";
+      if (/<\/head>/i.test(outHtml)) {
+        outHtml = outHtml.replace(/<\/head>/i, function (m) { return scriptTag + m; });
+        changed = true;
+      } else if (/<\/body>/i.test(outHtml)) {
+        outHtml = outHtml.replace(/<\/body>/i, function (m) { return scriptTag + m; });
+        changed = true;
+      }
+    }
+    return { html: outHtml, changed: changed };
+  }
+
+  function parseBoolArg(name, defaultValue) {
+    if (typeof $argument === "boolean") {
+      return name === "rewriteWeb" ? $argument : defaultValue;
+    }
+    if (typeof $argument === "object" && $argument !== null &&
+        Object.prototype.hasOwnProperty.call($argument, name)) {
+      return !/^(?:false|0|off|no)$/i.test(String($argument[name]).trim());
+    }
+    if (typeof $argument !== "string") return defaultValue;
     var trimmed = $argument.trim();
-    if (!trimmed || trimmed.indexOf("{{{") !== -1) return true;
-    if (/^(?:false|0|off|no)$/i.test(trimmed)) return false;
-    var match = trimmed.match(/(?:^|[&,;\s])rewriteWeb\s*=\s*([^&,;\s]+)/i);
-    if (!match) return true;
+    if (!trimmed) return defaultValue;
+    if (name === "rewriteWeb" && trimmed.indexOf("=") === -1) {
+      if (trimmed.indexOf("{{{") !== -1) return defaultValue;
+      return !/^(?:false|0|off|no)$/i.test(trimmed);
+    }
+    var re = new RegExp("(?:^|[&,;\\s])" + name + "\\s*=\\s*([^&,;\\s]+)", "i");
+    var match = trimmed.match(re);
+    if (!match) return defaultValue;
     var val = match[1].replace(/^["']|["']$/g, "").trim();
-    if (!val || val.indexOf("{{{") !== -1) return true;
+    if (!val || val.indexOf("{{{") !== -1) return defaultValue;
     return !/^(?:false|0|off|no)$/i.test(val);
   }
 

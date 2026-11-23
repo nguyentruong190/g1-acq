@@ -3,8 +3,8 @@
 
 (function () {
   var ROOT = "https://one.google.com/g1-sku-report";
-  var VERSION = "v8.1.0";
-  var COLLECTOR_VERSION = "g1-acq-v8.1";
+  var VERSION = "v8.2.0";
+  var COLLECTOR_VERSION = "g1-acq-v8.2";
   var CONFIGURED_TARGET = "g1.2tb.ai.12months_ip_90p";
   var LEGACY_TARGET = "g1.2tb.ai.annual";
   var SCAN_KEY = "g1.sku.scan.v1";
